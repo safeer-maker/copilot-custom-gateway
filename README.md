@@ -1,106 +1,145 @@
-Here is your complete, comprehensive `README.md` file for the project root, updated to reflect the dynamic model discovery architecture we just designed.
+# Copilot Gateway
 
---
+A FastAPI + LangChain service that lets you use **GitHub Copilot Chat and Agent mode in VSCode for free**, backed by Google Gemini (or any OpenAI-compatible LLM). It exposes an OpenAI-compatible API that VSCode's BYOK (Bring Your Own Key) system connects to directly.
 
-# Copilot Custom Gateway (`copilot-custom-gateway`)
-
-An enterprise-grade, low-latency API proxy built with **Python FastAPI** and **LangChain**. This middleware translates standard GitHub Copilot Chat and Agent requests into compatible orchestrations for privately hosted custom Large Language Models (LLMs), bypassing public cloud infrastructure entirely.
-
-Instead of relying on static, hardcoded configuration files, this gateway implements an open-ended **Dynamic Model Discovery Engine** (`/v1/models`). When Visual Studio Code initializes, it dynamically polls this proxy, automatically populating the Copilot model selection dropdown on the fly.
+```
+VSCode Copilot Chat / Agent
+        │  OpenAI-compatible HTTP
+        ▼
+┌──────────────────────┐
+│   copilot-gateway    │   GET  /v1/models
+│   FastAPI + LangChain│   POST /v1/chat/completions
+└──────────┬───────────┘
+           │ LangChain
+           ▼
+     Google Gemini API
+     (free tier — 1,500 req/day)
+```
 
 ---
 
-## Project Architecture
+## Prerequisites
 
-This repository establishes a Bring Your Own Key (BYOK) compliant local endpoint. It wraps your private models within an OpenAI-compatible API layer, allowing VS Code Chat and autonomous Copilot Agents to interact directly with your air-gapped system.
-
-```
-┌─────────────────┐             ┌────────────────────────┐             ┌─────────────────────┐
-│  VS Code Chat   │  HTTP GET   │ Copilot Custom Gateway │  LangChain  │   Privately Hosted  │
-│  & Agent Views  ├────────────►│   (FastAPI Proxy)      ├────────────►│   Inference Model   │
-└─────────────────┘  /v1/...    └────────────────────────┘  Protocols  └─────────────────────┘
-
-```
-
-## Key Features
-
-* **Dynamic Model Discovery:** Exposes a native `/v1/models` endpoint, allowing VS Code to auto-load your entire private model catalog dynamically.
-* **OpenAI Compatibility Layer:** Emulates `/v1/chat/completions` supporting real-time Server-Sent Events (SSE) token streaming.
-* **Agent Tool-Calling Enabled:** Forwards structural payload signatures (`toolCalling: true`) to ensure Copilot Agent views can execute multi-step workspace tasks seamlessly.
-* **LangChain Orchestration:** Easily swap underlying inference backends (HuggingFace, vLLM, local Ollama nodes, or proprietary clusters) based on the incoming model parameter.
-* **Stateless & High-Performance:** Engineered over FastAPI's async event loop for sub-millisecond translation overhead.
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) (used for package management)
+- VSCode with the **GitHub Copilot** and **GitHub Copilot Chat** extensions
+- A free Google Gemini API key — get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (no credit card required)
 
 ---
 
-## Quick Start
+## Setup
 
-### 1. Prerequisites
-
-* Python 3.10 or higher
-* VS Code (with GitHub Copilot and Copilot Chat extensions active)
-
-### 2. Installation
-
-Clone the repository and install dependencies:
+**1. Clone and install dependencies:**
 
 ```bash
-cd copilot-custom-gateway
-pip install -r requirements.txt
-
+git clone <repo-url>
+cd copilot-gateway
+uv pip install -r requirements.txt
 ```
 
-### 3. Running the Gateway
-
-Launch the Uvicorn high-performance ASGI server:
+**2. Create your `.env` file:**
 
 ```bash
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-
+cp .env.example .env
 ```
 
-The gateway will initialize and listen natively on `[http://127.0.0.1:8080](http://127.0.0.1:8080)`.
+Edit `.env` and paste your Gemini API key:
+
+```
+GOOGLE_API_KEY=your_key_here
+```
+
+**3. Start the gateway:**
+
+```bash
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload
+```
+
+The server runs at `http://127.0.0.1:8080`.
 
 ---
 
-## Client Configurations
+## Verify the gateway is working
 
-To connect your VS Code environment to this private infrastructure, you must register the endpoint within your user profile's language model registry.
+Before connecting VSCode, confirm the two endpoints respond correctly:
 
-### Step 1: Open the Custom Registry
+**Model discovery:**
+```bash
+curl http://127.0.0.1:8080/v1/models
+```
+Expected output:
+```json
+{"object": "list", "data": [{"id": "gemini-2.5-flash", ...}]}
+```
 
-1. Launch VS Code.
-2. Open the **Command Palette** using `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (macOS).
-3. Type and execute: **Chat: Manage Language Models**.
-4. Select **Add Models** and choose **Custom Endpoint** from the dropdown option list.
+**Chat ping:**
+```bash
+curl -X POST http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"say hello"}],"stream":false}'
+```
+Expected: a JSON response with Gemini's answer in `choices[0].message.content`.
 
-This action instructs VS Code to automatically create and open your user profile's hidden `chatLanguageModels.json` configuration file.
+---
 
-### Step 2: Inject the Dynamic Model Definition Block
+## Connect to VSCode Copilot
 
-Replace or append the content within your `chatLanguageModels.json` file with the following technical schema declaration:
+**Option A — UI (recommended):**
+
+1. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+2. Run **"Chat: Manage Language Models"**
+3. Click **Add Models** → **Custom Endpoint**
+4. Fill in:
+   - **Base URL:** `http://127.0.0.1:8080/v1`
+   - **API type:** Chat Completions
+   - **API key:** any string (e.g. `dummy`)
+5. `gemini-2.5-flash` should appear in the model picker automatically.
+
+**Option B — settings.json (fallback if Option A doesn't show the model):**
+
+Add this to your VSCode `settings.json`:
 
 ```json
-[
-  {
-    "name": "Local Gateway (Dynamic)",
-    "vendor": "openai", 
-    "apiType": "chat-completions",
-    "apiKey": "ccg_live_7efda921bc4d390a8f8e0d1b3c5a6f7e80123456789abcdef",
-    "url": "http://127.0.0.1:8080/v1"
+"github.copilot.chat.customOAIModels": {
+  "gemini-2.5-flash": {
+    "name": "Gemini 2.5 Flash (Gateway)",
+    "url": "http://127.0.0.1:8080/v1/chat/completions",
+    "toolCalling": true,
+    "maxInputTokens": 128000,
+    "maxOutputTokens": 8000
   }
-]
+}
+```
+
+---
+
+## Using it
+
+1. Make sure the gateway server is running (`uv run uvicorn app.main:app --host 127.0.0.1 --port 8080 --reload`)
+2. Open Copilot Chat in VSCode (`Ctrl+Alt+I`)
+3. Select **gemini-2.5-flash** from the model picker
+4. Ask a question about your code — the answer comes through your gateway from Gemini
+
+Agent mode works the same way — select the model and switch to Agent mode in the chat panel.
+
+---
+
+## Project structure
 
 ```
-    
-#### Critical Configuration Details:
+app/
+├── main.py                          # FastAPI service (GET /v1/models, POST /v1/chat/completions)
+└── scripts/
+    └── dynamic-vendor-selection.py  # Original prototype (reference only)
+requirements.txt                     # Python dependencies
+.env.example                         # API key template
+```
 
-* `vendor: "openai"`: Setting this vendor type signals to VS Code that it shouldn't look for a static list. Instead, it instructs the IDE to run a background handshake request directly to your `url/models` route.
-* `url`: Explicitly points to your running FastAPI server base path.
-* `apiKey`: The private, secure access token mapped to your custom gateway environment logic.
+---
 
-### Step 3: Verify Integration
+## Roadmap
 
-1. Restart or reload your VS Code window (`Developer: Reload Window` via the Command Palette).
-2. Open the **Copilot Chat Panel** (`Ctrl+Alt+I` or `Cmd+Ctrl+I`) or the **Agent View**.
-3. Click on the model selection dropdown header (located next to the chat input area).
-4. You will see your local model catalog auto-populated dynamically straight from your server! Select your desired model, and your threads will now route 100% locally through your gateway proxy.
+- [ ] Multi-vendor fallback (Groq → Cerebras → OpenRouter → Gemini)
+- [ ] Agent-mode tool-calling round-trip polish
+- [ ] API key authentication on the gateway
+- [ ] Docker / systemd service for auto-start
